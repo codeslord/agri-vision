@@ -27,7 +27,7 @@ void setup(void) {
 
 void loop(void) {
     int val = Serial.parseInt();
-    pwm_control = map(val, 0, RESOLUTION, PWM_MIN, PWM_MAX);
+    pwm_control = map(val, 0, RESOLUTION, PWM_MAX, PWM_MIN);
     if (pwm_control > PWM_MAX) { pwm_control = PWM_MAX; }
     if (pwm_control < PWM_MIN) { pwm_control = PWM_MIN; }
     analogWrite(CONTROL_PIN, pwm_control);

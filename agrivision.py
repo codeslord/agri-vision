@@ -94,6 +94,7 @@ class AgriVision:
         # Attempt to set each camera index/name
         pretty_print('CAM', 'Initializing Cameras')
         self.cameras = []
+        self.images = []
         for i in range(self.CAMERAS):
             try:
                 if self.VERBOSE: pretty_print('CAM', 'Attaching Camera #%d' % i)
@@ -105,6 +106,7 @@ class AgriVision:
                     cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_HEIGHT)
                     cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_WIDTH)
                 self.cameras.append(cam)
+                self.images.append(np.zeros((self.CAMERA_HEIGHT, self.CAMERA_WIDTH, 3), np.uint8))
                 if self.VERBOSE: pretty_print('CAM', 'Camera #%d OK' % i)
             except Exception as error:
                 pretty_print('CAM', 'ERROR: %s' % str(error))
@@ -215,6 +217,37 @@ class AgriVision:
         b = time.time()
         if self.VERBOSE: pretty_print('CAM', '... %.2f ms' % ((b - a) * 1000))
         return images
+
+    def capture_images2(self):
+        a = time.time()
+        pretty_print('CAM', 'Capturing Images ...')
+        images = []
+        for i in range(self.CAMERAS):
+            pretty_print('CAM', 'Attempting on Camera #%d' % i)
+            try:
+                (s, bgr) = self.cameras[i].read()
+                if s and (self.images[i] is not None):
+                    if self.CAMERA_ROTATED: bgr = self.rotate_image(bgr)
+                    if np.all(bgr==self.images[i]):
+                        images.append(None)
+                        pretty_print('CAM', 'ERROR: Frozen frame')
+                    else:
+                        pretty_print('CAM', 'Capture successful: %s' % str(bgr.shape))
+                        images.append(bgr)
+                else:
+                    pretty_print('CAM', 'ERROR: Capture failed')
+                    self.cameras[i].release()
+                    self.cameras[i] = cv2.VideoCapture(i)
+                    (s, bgr) = self.cameras[i].read()
+                    self.images[i] = np.zeros((self.CAMERA_HEIGHT, self.CAMERA_WIDTH, 3), np.uint8)
+            except KeyboardInterrupt:
+                raise KeyboardInterrupt
+            except:
+                images.append(None)
+        b = time.time()
+        pretty_print('CAM', '... %.2f ms' % ((b - a) * 1000))
+        return images
+
         
     ## Plant Segmentation Filter
     """
@@ -558,7 +591,7 @@ class AgriVision:
     def run(self):
         while True:
             try:
-                images = self.capture_images()
+                images = self.capture_images2()
                 masks = self.plant_filter(images)
                 offsets = self.find_offset(masks)
                 (est, avg, diff) = self.estimate_row(offsets)
