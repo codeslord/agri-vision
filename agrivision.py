@@ -99,6 +99,10 @@ class AgriVision:
             try:
                 if self.VERBOSE: pretty_print('CAM', 'Attaching Camera #%d' % i)
                 cam = cv2.VideoCapture(i)
+		cam.set(cv.CV_CAP_PROP_SATURATION, self.CAMERA_SATURATION)
+		cam.set(cv.CV_CAP_PROP_BRIGHTNESS, self.CAMERA_BRIGHTNESS)
+		cam.set(cv.CV_CAP_PROP_CONTRAST, self.CAMERA_CONTRAST)
+		cam.set(cv.CV_CAP_PROP_FPS, self.CAMERA_FPS)
                 if not self.CAMERA_ROTATED:
                     cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
                     cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
@@ -106,7 +110,7 @@ class AgriVision:
                     cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_HEIGHT)
                     cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_WIDTH)
                 self.cameras.append(cam)
-                self.images.append(np.zeros((self.CAMERA_HEIGHT, self.CAMERA_WIDTH, 3), np.uint8))
+		self.images.append(np.zeros((self.CAMERA_HEIGHT, self.CAMERA_WIDTH, 3), np.uint8))
                 if self.VERBOSE: pretty_print('CAM', 'Camera #%d OK' % i)
             except Exception as error:
                 pretty_print('CAM', 'ERROR: %s' % str(error))
@@ -118,6 +122,7 @@ class AgriVision:
         if self.VERBOSE: pretty_print('DB', 'Initializing MongoDB')
         if self.VERBOSE: pretty_print('DB', 'Connecting to MongoDB: %s' % self.MONGO_NAME)
         if self.VERBOSE: pretty_print('DB', 'New session: %s' % self.LOG_NAME)
+
         try:
             self.client = MongoClient()
             self.database = self.client[self.MONGO_NAME]
@@ -195,30 +200,7 @@ class AgriVision:
         bgr = cv2.transpose(bgr)
         return bgr
 
-    ## Capture Images
-    """
-    1. Attempt to capture an image
-    2. Repeat for each capture interface
-    """
     def capture_images(self):
-        a = time.time()
-        if self.VERBOSE: pretty_print('CAM', 'Capturing Images ...')
-        images = []
-        for cam in self.cameras:
-            if self.VERBOSE: pretty_print('CAM', 'Attempting on cam ID: %s' % str(cam))
-            (s, bgr) = cam.read()
-            if s:
-                if self.CAMERA_ROTATED: bgr = self.rotate_image(bgr)
-                images.append(bgr)
-                if self.VERBOSE: pretty_print('CAM', 'Capture successful: %s' % str(bgr.shape))
-            else:
-                images.append(None)
-                if self.VERBOSE: pretty_print('CAM', 'ERROR: Capture failed')
-        b = time.time()
-        if self.VERBOSE: pretty_print('CAM', '... %.2f ms' % ((b - a) * 1000))
-        return images
-
-    def capture_images2(self):
         a = time.time()
         pretty_print('CAM', 'Capturing Images ...')
         images = []
@@ -236,9 +218,6 @@ class AgriVision:
                         images.append(bgr)
                 else:
                     pretty_print('CAM', 'ERROR: Capture failed')
-                    self.cameras[i].release()
-                    self.cameras[i] = cv2.VideoCapture(i)
-                    (s, bgr) = self.cameras[i].read()
                     self.images[i] = np.zeros((self.CAMERA_HEIGHT, self.CAMERA_WIDTH, 3), np.uint8)
             except KeyboardInterrupt:
                 raise KeyboardInterrupt
@@ -264,16 +243,13 @@ class AgriVision:
             if bgr is not None:
                 try:
                     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-                    s_mean = hsv[:,:,1].mean()
-                    v_mean = hsv[:,:,2].mean()
-                    self.threshold_min[1] = s_mean # overwrite the saturation minima
-                    self.threshold_min[2] = v_mean # overwrite the value minima
-                    pretty_print('BPPD', 'Smean = %.1f' % (s_mean))
-                    pretty_print('BPPD', 'Vmean = %.1f' % (v_mean))
+                    self.threshold_min[1] = np.percentile(hsv[:,:,1], 100 * self.SAT_MIN / 255.0) # overwrite the saturation minima
+                    self.threshold_min[2] = np.percentile(hsv[:,:,2], 100 * self.VAL_MIN / 255.0) # overwrite the value minima
+		    self.threshold_max[1] = 255
+		    self.threshold_max[2] = np.percentile(hsv[:,:,2], 100 * self.VAL_MAX / 255.0)
                     mask = cv2.inRange(hsv, self.threshold_min, self.threshold_max)
                     masks.append(mask)
-                    if self.VERBOSE: pretty_print('BPPD', 'Mask Number #%d was successful' % len(masks))
-                    
+                    if self.VERBOSE: pretty_print('BPPD', 'Mask Number #%d was successful' % len(masks))                    
                 except Exception as error:
                     pretty_print('BPPD', str(error))
             else:
@@ -293,7 +269,8 @@ class AgriVision:
     """
     def find_offset(self, masks):
         a = time.time()
-        indices = []
+        offsets = []
+	sums = []
         for mask in masks:
             if mask is not None:
                 try:
@@ -307,14 +284,20 @@ class AgriVision:
                         time.sleep(0.1)
                         plt.close(fig)
                     num_probable = len(probable[0])
-                    centroid = int(np.median(probable[0])) - self.CAMERA_CENTER
-                    indices.append(centroid)
+		    if (num_probable == self.CAMERA_WIDTH * self.THRESHOLD_PERCENTILE / 100.0):
+			print "WARNING"
+			time.sleep(1)
+                    best = int(np.median(probable[0]))
+		    sum = column_sum[best]
+		    centroid = best - self.CAMERA_CENTER
+                    offsets.append(centroid)
+		    sums.append(sum)
                 except Exception as error:
                     pretty_print('OFF', '%s' % str(error))
-        if self.VERBOSE: pretty_print('OFF', 'Detected indices: %s' % str(indices))
+        if self.VERBOSE: pretty_print('OFF', 'Detected offsets: %s' % str(offsets))
         b = time.time()
         if self.VERBOSE: pretty_print('OFF', '... %.2f ms' % ((b - a) * 1000))
-        return indices
+        return offsets, sums
         
     ## Best Guess for row based on multiple offsets from indices
     """
@@ -324,11 +307,13 @@ class AgriVision:
     2. Calculate weights of previous offset
     3. Estimate the weighted position of the crop row (in pixels)
     """
-    def estimate_row(self, indices):
+    def estimate_row(self, indices, sums):
         a = time.time()
-        if self.VERBOSE: pretty_print('ROW', 'Estimating row ofset ...')
+        if self.VERBOSE: pretty_print('ROW', 'Smoothing offset estimation ...')
         try:
-            est =  int(np.mean(indices))
+	    indices = np.array(indices)
+	    sums = np.array(sums)
+            est =  indices[np.argmax(sums)]
         except Exception as error:
             pretty_print('ROW', 'ERROR: %s' % str(error))
             est = self.CAMERA_CENTER
@@ -591,10 +576,10 @@ class AgriVision:
     def run(self):
         while True:
             try:
-                images = self.capture_images2()
+                images = self.capture_images()
                 masks = self.plant_filter(images)
-                offsets = self.find_offset(masks)
-                (est, avg, diff) = self.estimate_row(offsets)
+                offsets, sums = self.find_offset(masks)
+                (est, avg, diff) = self.estimate_row(offsets, sums)
                 pwm, volts = self.calculate_output(est, avg, diff)
                 err = self.set_controller(pwm)
                 sample = {
